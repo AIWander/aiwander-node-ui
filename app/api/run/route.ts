@@ -3,21 +3,25 @@ import { MCPCONFIG_URL, DEFAULT_MODEL, DEFAULT_MCP_SERVERS, DEFAULT_TOOL_FILTER 
 export async function POST(request: Request) {
   const body = await request.json();
   const model = body.model || DEFAULT_MODEL;
+  const userPreferences: string = body.user_preferences || "";
+
+  const task: Record<string, unknown> = {
+    name: "free_play",
+    model,
+    user_prompt: body.user_prompt,
+    max_iterations: 6,
+    mcp_servers: DEFAULT_MCP_SERVERS,
+    tool_filter: DEFAULT_TOOL_FILTER,
+  };
+
+  if (userPreferences.trim()) {
+    task.system_prompt = `[User Preferences]\n${userPreferences.trim()}\n\n[System]`;
+  }
 
   const upstream = await fetch(`${MCPCONFIG_URL}/run`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      model,
-      task: {
-        name: "free_play",
-        model,
-        user_prompt: body.user_prompt,
-        max_iterations: 6,
-        mcp_servers: DEFAULT_MCP_SERVERS,
-        tool_filter: DEFAULT_TOOL_FILTER,
-      },
-    }),
+    body: JSON.stringify({ model, task }),
   });
 
   if (!upstream.ok || !upstream.body) {
