@@ -1,4 +1,10 @@
 import { MCPCONFIG_URL } from "@/lib/defaults";
+import { readFile } from "fs/promises";
+
+// Workaround: hands' browser_screenshot returns empty base64 by default,
+// but save_path mode works reliably. We trigger the agent to call
+// browser_screenshot with save_path, then read the file ourselves.
+const SNAPSHOT_PATH = "/tmp/aiwander_snap.jpg";
 
 export async function GET() {
   try {
@@ -10,10 +16,14 @@ export async function GET() {
         task: {
           name: "snap",
           model: "gpt-oss-20b",
-          user_prompt: "Take a screenshot of the current Chrome tab and return the image.",
-          max_iterations: 2,
+          user_prompt:
+            `First call browser_attach with port=9222. ` +
+            `Then call browser_screenshot with these exact arguments: ` +
+            `save_path="${SNAPSHOT_PATH}", quality=80, max_width=1280. ` +
+            `Then reply with "done".`,
+          max_iterations: 3,
           mcp_servers: ["hands"],
-          tool_filter: ["browser_screenshot"],
+          tool_filter: ["browser_attach", "browser_screenshot"],
         },
       }),
     });
@@ -25,10 +35,13 @@ export async function GET() {
       );
     }
 
+    // Drain SSE — we just need to wait for completion. We watch for a
+    // tool_result whose content references our SNAPSHOT_PATH (proof the
+    // tool succeeded) before we trust the file on disk.
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let screenshotB64: string | null = null;
+    let snapshotSaved = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -48,17 +61,13 @@ export async function GET() {
 
         try {
           const event = JSON.parse(data);
-          if (event.kind === "tool_result" && event.ok) {
-            // content may be JSON string with a result/image key, or raw base64
-            try {
-              const parsed = JSON.parse(event.content);
-              screenshotB64 = parsed.result || parsed.image || parsed.data || null;
-            } catch {
-              // might be raw base64
-              if (event.content.length > 100) {
-                screenshotB64 = event.content;
-              }
-            }
+          if (
+            event.kind === "tool_result" &&
+            event.ok &&
+            typeof event.content === "string" &&
+            event.content.includes(SNAPSHOT_PATH)
+          ) {
+            snapshotSaved = true;
           }
         } catch {
           // skip malformed
@@ -66,16 +75,19 @@ export async function GET() {
       }
     }
 
-    if (!screenshotB64) {
-      return Response.json({ error: "No screenshot data received" }, { status: 500 });
+    if (!snapshotSaved) {
+      return Response.json(
+        { error: "Screenshot tool did not save the file" },
+        { status: 500 },
+      );
     }
 
-    // Strip data URI prefix if present
-    const raw = screenshotB64.replace(/^data:image\/[^;]+;base64,/, "");
-    const buf = Buffer.from(raw, "base64");
-
+    const buf = await readFile(SNAPSHOT_PATH);
     return new Response(buf, {
-      headers: { "content-type": "image/jpeg", "cache-control": "no-store" },
+      headers: {
+        "content-type": "image/jpeg",
+        "cache-control": "no-store",
+      },
     });
   } catch (err) {
     return Response.json(
