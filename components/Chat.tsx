@@ -34,9 +34,11 @@ interface RunMeta {
 interface ChatProps {
   onBrowserAction?: (url?: string) => void;
   onStreamingChange?: (streaming: boolean) => void;
+  onEvent?: (event: Event) => void;
+  userPreferences?: string;
 }
 
-export function Chat({ onBrowserAction, onStreamingChange }: ChatProps) {
+export function Chat({ onBrowserAction, onStreamingChange, onEvent, userPreferences }: ChatProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [toolCalls, setToolCalls] = useState<ToolCallEntry[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
@@ -73,7 +75,7 @@ export function Chat({ onBrowserAction, onStreamingChange }: ChatProps) {
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ user_prompt: prompt }),
+        body: JSON.stringify({ user_prompt: prompt, user_preferences: userPreferences || "" }),
       });
 
       if (!res.ok || !res.body) {
@@ -84,6 +86,7 @@ export function Chat({ onBrowserAction, onStreamingChange }: ChatProps) {
 
       for await (const event of parseSSE(res.body)) {
         handleEvent(event);
+        onEvent?.(event);
         scrollToBottom();
       }
     } catch (err) {
